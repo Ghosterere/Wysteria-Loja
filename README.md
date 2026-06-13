@@ -1,120 +1,170 @@
-# Bot de lojas para Discord
+# Bot de Marketplace para Discord
 
-Este projeto e um bot em Python para criar lojas dentro de um servidor do Discord. Agora ele tambem permite abrir um painel interativo para navegar pelas lojas, escolher produtos e registrar pedidos sem depender apenas de comandos digitados manualmente.
+Bot em `discord.py` com sistema de lojas, produtos, pedidos, tickets, avaliações, aprovação de lojistas, publicação pública de vitrines e histórico persistido em `SQLite`.
 
-## O que o bot faz
+## Instalação
 
-- Permite que qualquer usuario crie a propria loja.
-- Permite que o dono da loja cadastre produtos com nome, descricao e preco.
-- Permite alterar o preco dos proprios produtos.
-- Mostra as lojas e os produtos em embeds mais organizados.
-- Abre um painel interativo com select menus para navegar pelas lojas.
-- Registra pedidos de compra no SQLite e envia um resumo para o comprador.
-- Tenta avisar o dono da loja por DM quando um pedido novo e criado.
-
-## Comandos disponiveis
-
-| Comando | Quem usa | Para que serve |
-| --- | --- | --- |
-| `/criar_loja` | Qualquer usuario | Cria uma loja no servidor. |
-| `/lojas` | Qualquer usuario | Lista as lojas do servidor. |
-| `/painel_loja` | Qualquer usuario | Abre o painel interativo para navegar e comprar. |
-| `/ver_loja` | Qualquer usuario | Mostra os produtos de uma loja. |
-| `/criar_produto` | Dono da loja | Cria um produto com o preco escolhido pelo dono. |
-| `/alterar_preco` | Dono da loja | Altera o preco de um produto da propria loja. |
-| `/comprar_produto` | Qualquer usuario | Faz um pedido manualmente pelo ID do produto. |
-| `/meus_pedidos` | Comprador | Lista os pedidos que voce fez. |
-| `/pedidos_loja` | Dono da loja | Lista os pedidos recebidos nas suas lojas. |
-
-## Como funciona o painel
-
-1. Use `/painel_loja`.
-2. Escolha uma loja no menu.
-3. O bot abre uma vitrine da loja em mensagem privada para voce dentro do Discord.
-4. Escolha um produto no menu da vitrine.
-5. Preencha o modal com quantidade e detalhes do pedido.
-6. O bot salva o pedido e mostra um resumo.
-
-## O que voce precisa para testar
-
-1. Python 3.10 ou mais recente.
-2. Uma conta no Discord.
-3. Permissao para adicionar bots em um servidor de teste.
-4. Um bot criado no [Discord Developer Portal](https://discord.com/developers/applications).
-
-## Como criar o bot no Discord
-
-1. Entre no [Discord Developer Portal](https://discord.com/developers/applications).
-2. Clique em **New Application**.
-3. De um nome para a aplicacao.
-4. Va em **Bot** e clique em **Add Bot**.
-5. Copie o token do bot. Esse token vai no arquivo `.env`.
-6. Em **OAuth2 > URL Generator**, marque:
-   - `bot`
-   - `applications.commands`
-7. Em permissoes do bot, para testar, marque pelo menos:
-   - `Send Messages`
-   - `Use Slash Commands`
-   - `Embed Links`
-8. Abra a URL gerada e adicione o bot ao seu servidor de teste.
-
-## Como rodar localmente
-
-Crie e ative um ambiente virtual:
-
-```bash
-python -m venv .venv
-source .venv/bin/activate
-```
-
-Instale as dependencias:
+1. Instale o Python 3.12+.
+2. Crie e ative uma virtualenv.
+3. Instale as dependências:
 
 ```bash
 pip install -r requirements.txt
 ```
 
-Crie o arquivo `.env` baseado no exemplo:
-
-```bash
-cp .env.example .env
-```
-
-Edite o `.env` e coloque o token real do bot:
-
-```env
-DISCORD_TOKEN=seu_token_aqui
-```
-
-Opcionalmente, coloque o ID do seu servidor de teste em `GUILD_ID`. Isso faz os comandos aparecerem mais rapido durante o desenvolvimento:
-
-```env
-GUILD_ID=123456789012345678
-```
-
-Para descobrir o ID do servidor, ative o modo desenvolvedor no Discord em **Configuracoes > Avancado > Modo desenvolvedor**, clique com o botao direito no servidor e escolha **Copiar ID**.
-
-Inicie o bot:
+4. Inicie o bot:
 
 ```bash
 python bot.py
 ```
 
-Quando aparecer `Bot conectado como ...`, voce ja pode abrir `/painel_loja`.
+## Configuração
 
-## Fluxo de teste recomendado
+Configure o arquivo `.env` com os IDs do seu servidor:
 
-1. Use `/criar_loja nome: Design do Joao descricao: Banners, molduras e thumbnails`.
-2. Use `/criar_produto id_loja: 1 nome: Banner simples preco: 15,00 descricao: Banner estatico para perfil`.
-3. Use `/criar_produto id_loja: 1 nome: Moldura personalizada preco: 25,50 descricao: Moldura para avatar`.
-4. Use `/painel_loja` e escolha a loja.
-5. Escolha um produto e envie um pedido pelo modal.
-6. Use `/meus_pedidos` para confirmar o registro do pedido.
-7. Entre com a conta dona da loja e use `/pedidos_loja`.
+```env
+DISCORD_TOKEN=
+GUILD_ID=
+DATABASE_PATH=lojas.db
+LOJISTA_ROLE_NAME=Lojista
+ADMIN_TESTER_IDS=
+TICKET_CATEGORY_ID=
+TICKET_ARCHIVE_CATEGORY_ID=
+FEEDBACK_CHANNEL_ID=
+SERVICE_DESK_CHANNEL_ID=
+TICKET_LOG_CHANNEL_ID=
+BOOST_THANK_CHANNEL_ID=
+SELLER_APPLICATION_CHANNEL_ID=
+```
 
-## Observacoes importantes
+### O que cada campo faz
 
-- O banco local padrao e `lojas.db`.
-- O arquivo `.env` e o banco `.db` ficam ignorados pelo Git para nao vazar token nem dados locais.
-- Este bot ainda nao faz pagamento automatico. O pedido serve para registrar interesse e facilitar o contato entre cliente e vendedor.
-- Se a DM do vendedor estiver bloqueada, o pedido continua salvo normalmente, mas o aviso privado pode nao chegar.
-- Nunca compartilhe o token do seu bot. Se ele vazar, gere outro no Developer Portal.
+- `DISCORD_TOKEN`: token do bot.
+- `GUILD_ID`: servidor onde os slash commands serão sincronizados imediatamente.
+- `DATABASE_PATH`: caminho do banco SQLite.
+- `LOJISTA_ROLE_NAME`: nome do cargo exigido para criar e gerenciar lojas.
+- `ADMIN_TESTER_IDS`: IDs separados por vírgula autorizados a testar compra na própria loja.
+- `TICKET_CATEGORY_ID`: categoria usada no fallback de tickets por canal privado.
+- `TICKET_ARCHIVE_CATEGORY_ID`: categoria para arquivar tickets concluídos/fechados.
+- `FEEDBACK_CHANNEL_ID`: canal para publicar avaliações recebidas.
+- `SERVICE_DESK_CHANNEL_ID`: canal-base onde o bot tenta abrir threads privadas de atendimento.
+- `TICKET_LOG_CHANNEL_ID`: canal de logs dos pedidos e transcripts.
+- `BOOST_THANK_CHANNEL_ID`: canal de agradecimento de boost.
+- `SELLER_APPLICATION_CHANNEL_ID`: canal onde chegam solicitações de lojista para aprovação.
+
+## Como criar loja
+
+1. Garanta que o usuário tenha o cargo definido em `LOJISTA_ROLE_NAME`.
+2. Use `/loja`.
+3. Clique em `Criar loja`.
+4. Preencha nome, descrição, emoji, headline e cor.
+
+Também existe o comando `/criar_loja` por compatibilidade.
+
+## Como criar produto
+
+1. Use `/loja`.
+2. Selecione a loja.
+3. Clique em `Novo serviço`.
+4. Preencha nome, categoria, preço e descrição.
+
+Também existe o comando `/criar_produto`.
+
+## Como configurar termos
+
+1. Use `/loja`.
+2. Selecione a loja.
+3. Clique em `Termos da loja`.
+4. Defina o texto dos termos.
+5. Para limpar, digite `remover`.
+
+Os termos são exibidos antes da compra e o aceite fica registrado no banco.
+
+## Como solicitar cargo de lojista
+
+1. Use `/painel`.
+2. Escolha `Solicitar lojista`.
+3. Preencha portfólio e especialidades.
+
+Também existe o comando `/solicitar_lojista`.
+
+## Como aprovar lojistas
+
+1. Configure `SELLER_APPLICATION_CHANNEL_ID`.
+2. Dê a um administrador a permissão `Gerenciar Servidor`.
+3. No canal de solicitações, use o botão `Aprovar` ou `Recusar`.
+4. Em caso de recusa, informe o motivo no modal.
+
+Ao aprovar, o bot adiciona automaticamente o cargo definido em `LOJISTA_ROLE_NAME`.
+
+## Como funciona o sistema de pedidos
+
+1. O cliente usa `/painel` ou abre uma vitrine pública.
+2. Seleciona um ou mais produtos.
+3. Visualiza a prévia com avaliações.
+4. Aceita os termos, se houver.
+5. Informa quantidades e briefing.
+6. O bot cria o pedido, registra itens no banco e abre um atendimento privado.
+7. O lojista controla o fluxo com os botões:
+   - `Em atendimento`
+   - `Concluir`
+   - `Fechar ticket`
+   - `Reabrir`
+   - `Chamar cliente`
+   - `Ver transcript`
+   - `Avaliar atendimento`
+
+## Como funciona o sistema de avaliações
+
+1. O comprador conclui o atendimento.
+2. No ticket, o botão `Avaliar atendimento` fica disponível.
+3. O cliente envia nota de 1 a 5 e comentário opcional.
+4. A avaliação é vinculada ao editor responsável.
+5. A média e a quantidade aparecem na loja e na prévia de compra.
+6. Se `FEEDBACK_CHANNEL_ID` estiver configurado, o feedback também vai para o canal.
+
+## Como funciona o sistema de disponibilidade
+
+1. Use `/loja`.
+2. Selecione a loja.
+3. Clique em `Status da loja`.
+4. Defina:
+   - se a loja está aberta
+   - a disponibilidade: `disponivel`, `ocupado`, `ausente` ou `fechado`
+
+O status aparece nas listas e o sistema também mostra a quantidade de pedidos ativos da loja.
+
+## Fluxos principais
+
+- Cliente: `/painel` -> explorar lojas -> selecionar produtos -> comprar -> acompanhar em `Meus pedidos`.
+- Lojista: `/loja` -> criar loja -> criar produtos -> ajustar vitrine/status/termos/tema -> acompanhar histórico e estatísticas.
+- Admin: revisar solicitações no canal configurado e acompanhar logs de tickets/boosts.
+
+## Tabelas do banco
+
+- `shops`
+- `products`
+- `orders`
+- `order_items`
+- `order_logs`
+- `ratings`
+- `term_acceptances`
+- `seller_applications`
+- `shop_publications`
+- `boost_events`
+
+## Testes rápidos recomendados
+
+```bash
+python -m py_compile bot.py
+python -c "import bot"
+```
+
+Depois valide manualmente:
+
+1. `/painel` abre sem erro.
+2. `/loja` permite criar loja pelo botão.
+3. Compra com 1 produto funciona.
+4. Compra com múltiplos produtos funciona.
+5. Pedido concluído gera transcript completo.
+6. Recusa de lojista pede motivo e bloqueia nova revisão.
