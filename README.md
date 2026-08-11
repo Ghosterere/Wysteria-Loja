@@ -1,26 +1,65 @@
-# Bot de Marketplace para Discord
+# LojaDC — marketplace para Discord
 
-Bot em `discord.py` com sistema de lojas, produtos, pedidos, tickets, avaliações, aprovação de lojistas, publicação pública de vitrines e histórico persistido em `SQLite`.
+Bot de marketplace construído com `discord.py`. Ele permite que lojistas criem vitrines e catálogos, recebam pedidos em atendimentos privados e acompanhem histórico, avaliações e estatísticas. Os dados são persistidos localmente em SQLite.
+
+## Recursos
+
+- vitrines personalizáveis com emoji, cores, imagens, textos e temas prontos;
+- catálogo dividido por categorias e compra de um ou vários produtos;
+- termos obrigatórios com registro do aceite do comprador;
+- disponibilidade da loja e contagem de pedidos ativos;
+- tickets em thread privada, com fallback para canal privado;
+- etapas de atendimento, logs e transcript persistente;
+- avaliações de 1 a 5 estrelas vinculadas ao pedido e ao vendedor;
+- solicitação e aprovação do cargo de lojista;
+- publicação de vitrines em canais do servidor;
+- agradecimento automático por boosts;
+- IDs públicos de lojas e pedidos separados por servidor.
+
+## Requisitos
+
+- Python 3.12 ou mais recente;
+- um bot criado no Discord Developer Portal;
+- intent privilegiada **Server Members Intent** habilitada;
+- permissões do bot para ver e enviar mensagens, incorporar links, anexar arquivos, ler histórico, criar threads privadas, gerenciar canais, mensagens e cargos.
+
+O cargo do bot deve ficar acima do cargo configurado em `LOJISTA_ROLE_NAME` para que aprovações consigam atribuí-lo.
 
 ## Instalação
 
-1. Instale o Python 3.12+.
-2. Crie e ative uma virtualenv.
-3. Instale as dependências:
-
 ```bash
-pip install -r requirements.txt
+python -m venv .venv
 ```
 
-4. Inicie o bot:
+Ative o ambiente virtual:
+
+```powershell
+# Windows PowerShell
+.\.venv\Scripts\Activate.ps1
+```
+
+```bash
+# Linux/macOS
+source .venv/bin/activate
+```
+
+Instale as dependências:
+
+```bash
+python -m pip install -r requirements.txt
+```
+
+Crie um arquivo `.env` na raiz do projeto e, por fim, execute:
 
 ```bash
 python bot.py
 ```
 
+Na primeira inicialização, o banco e suas tabelas são criados automaticamente. Inicializações posteriores também aplicam as migrações previstas pelo código.
+
 ## Configuração
 
-Configure o arquivo `.env` com os IDs do seu servidor:
+Exemplo de `.env`:
 
 ```env
 DISCORD_TOKEN=
@@ -37,134 +76,162 @@ BOOST_THANK_CHANNEL_ID=
 SELLER_APPLICATION_CHANNEL_ID=
 ```
 
-### O que cada campo faz
+| Variável | Obrigatória | Descrição |
+| --- | --- | --- |
+| `DISCORD_TOKEN` | Sim | Token usado para conectar o bot. |
+| `GUILD_ID` | Não | ID do servidor de desenvolvimento. Sincroniza os comandos imediatamente nesse servidor; sem ele, a sincronização é global e pode demorar a aparecer. |
+| `DATABASE_PATH` | Não | Caminho do SQLite. O padrão é `lojas.db`. |
+| `LOJISTA_ROLE_NAME` | Não | Nome exato do cargo autorizado a criar e administrar lojas. O padrão é `Lojista`. |
+| `ADMIN_TESTER_IDS` | Não | IDs de usuários, separados por vírgula, que podem comprar na própria loja para testes. |
+| `TICKET_CATEGORY_ID` | Não | Categoria usada para canais privados de atendimento. Se não existir, o bot tenta criar uma categoria por lojista. |
+| `TICKET_ARCHIVE_CATEGORY_ID` | Não | Categoria para a qual canais concluídos ou fechados são movidos. |
+| `FEEDBACK_CHANNEL_ID` | Não | Canal que recebe avaliações publicadas. |
+| `SERVICE_DESK_CHANNEL_ID` | Não | Canal de texto ou fórum usado como central de atendimento. Em canal de texto, o bot tenta criar uma thread privada; se falhar, cria um canal privado. |
+| `TICKET_LOG_CHANNEL_ID` | Não | Canal que recebe eventos e uma prévia do transcript ao concluir ou fechar pedidos. |
+| `BOOST_THANK_CHANNEL_ID` | Não | Canal onde novos boosts são agradecidos. |
+| `SELLER_APPLICATION_CHANNEL_ID` | Para solicitações | Canal onde administradores analisam pedidos de cargo de lojista. |
 
-- `DISCORD_TOKEN`: token do bot.
-- `GUILD_ID`: servidor onde os slash commands serão sincronizados imediatamente.
-- `DATABASE_PATH`: caminho do banco SQLite.
-- `LOJISTA_ROLE_NAME`: nome do cargo exigido para criar e gerenciar lojas.
-- `ADMIN_TESTER_IDS`: IDs separados por vírgula autorizados a testar compra na própria loja.
-- `TICKET_CATEGORY_ID`: categoria usada no fallback de tickets por canal privado.
-- `TICKET_ARCHIVE_CATEGORY_ID`: categoria para arquivar tickets concluídos/fechados.
-- `FEEDBACK_CHANNEL_ID`: canal para publicar avaliações recebidas.
-- `SERVICE_DESK_CHANNEL_ID`: canal-base onde o bot tenta abrir threads privadas de atendimento.
-- `TICKET_LOG_CHANNEL_ID`: canal de logs dos pedidos e transcripts.
-- `BOOST_THANK_CHANNEL_ID`: canal de agradecimento de boost.
-- `SELLER_APPLICATION_CHANNEL_ID`: canal onde chegam solicitações de lojista para aprovação.
+Todos os IDs opcionais devem ser numéricos quando preenchidos. O `.env` e arquivos de banco estão ignorados pelo Git; não publique o token nem bancos de produção.
 
-## Como criar loja
+## Configuração no Discord
 
-1. Garanta que o usuário tenha o cargo definido em `LOJISTA_ROLE_NAME`.
-2. Use `/loja`.
-3. Clique em `Criar loja`.
-4. Preencha nome, descrição, emoji, headline e cor.
+1. No Developer Portal, habilite **Server Members Intent** na página do bot.
+2. Convide o bot com os escopos `bot` e `applications.commands`.
+3. Conceda as permissões necessárias aos recursos que você pretende usar.
+4. Crie o cargo de lojista e confira se o nome coincide com `LOJISTA_ROLE_NAME`.
+5. Posicione o cargo do bot acima do cargo de lojista.
+6. Preencha no `.env` os IDs dos canais e categorias desejados.
 
-Também existe o comando `/criar_loja` por compatibilidade.
+Para copiar um ID no Discord, ative o Modo Desenvolvedor em **Configurações → Avançado**, clique com o botão direito no servidor, canal ou categoria e escolha **Copiar ID**.
 
-## Como criar produto
+## Uso
 
-1. Use `/loja`.
-2. Selecione a loja.
-3. Clique em `Novo serviço`.
-4. Preencha nome, categoria, preço e descrição.
+### Fluxo do cliente
 
-Também existe o comando `/criar_produto`.
+1. Use `/painel` e escolha **Explorar lojas**.
+2. Abra uma vitrine e selecione um ou mais produtos.
+3. Confira preços e avaliações, aceite os termos quando existirem e envie quantidade e briefing.
+4. Continue o atendimento no ticket criado pelo bot.
+5. Consulte compras em `/meus_pedidos` e avalie o serviço depois da conclusão.
 
-## Como configurar termos
+O dono de uma loja não pode comprar nela, exceto quando seu ID estiver em `ADMIN_TESTER_IDS`.
 
-1. Use `/loja`.
-2. Selecione a loja.
-3. Clique em `Termos da loja`.
-4. Defina o texto dos termos.
-5. Para limpar, digite `remover`.
+### Fluxo do lojista
 
-Os termos são exibidos antes da compra e o aceite fica registrado no banco.
+1. Obtenha o cargo configurado em `LOJISTA_ROLE_NAME`.
+2. Use `/loja` e clique em **Criar loja**.
+3. Selecione a loja para personalizar a vitrine, definir termos e status e administrar o catálogo.
+4. Use **Divulgar loja** para publicar uma vitrine em um canal.
+5. Acompanhe pedidos, histórico e estatísticas pelo mesmo painel.
 
-## Como solicitar cargo de lojista
+No ticket, somente o lojista pode alterar o atendimento para **Em atendimento**, **Concluído**, **Fechado** ou **Reaberto**. Cliente e lojista podem consultar o transcript; somente o cliente pode avaliar um pedido concluído ou fechado.
 
-1. Use `/painel`.
-2. Escolha `Solicitar lojista`.
-3. Preencha portfólio e especialidades.
-
-Também existe o comando `/solicitar_lojista`.
-
-## Como aprovar lojistas
+### Solicitação de lojista
 
 1. Configure `SELLER_APPLICATION_CHANNEL_ID`.
-2. Dê a um administrador a permissão `Gerenciar Servidor`.
-3. No canal de solicitações, use o botão `Aprovar` ou `Recusar`.
-4. Em caso de recusa, informe o motivo no modal.
+2. O candidato usa `/painel` → **Solicitar lojista** ou `/solicitar_lojista`.
+3. Um membro com permissão **Gerenciar Servidor** aprova ou recusa a solicitação no canal configurado.
+4. Ao aprovar, o bot atribui o cargo de lojista; ao recusar, registra o motivo.
 
-Ao aprovar, o bot adiciona automaticamente o cargo definido em `LOJISTA_ROLE_NAME`.
+## Comandos
 
-## Como funciona o sistema de pedidos
+| Comando | Finalidade |
+| --- | --- |
+| `/painel` | Abre a central do cliente. |
+| `/loja` | Abre a central de gerenciamento do lojista. |
+| `/lojas` | Lista as lojas do servidor e seus IDs. |
+| `/ver_loja` | Abre uma vitrine pelo ID. |
+| `/meus_pedidos` | Lista pedidos feitos pelo usuário. |
+| `/pedidos_loja` | Lista pedidos recebidos pelo lojista. |
+| `/solicitar_lojista` | Abre o formulário de candidatura. |
+| `/criar_loja` | Cria uma loja pelo fluxo legado. |
+| `/criar_produto` | Adiciona um produto pelo fluxo legado. |
+| `/personalizar_loja` | Edita a identidade visual pelo fluxo legado. |
+| `/status_loja` | Altera abertura e disponibilidade. |
+| `/termos_loja` | Define ou remove termos. |
+| `/tema_loja` | Aplica os temas `booster`, `dark_red`, `gold` ou `neon_blue`. |
+| `/alterar_preco` | Atualiza o preço de um produto. |
+| `/comprar_produto` | Inicia diretamente a compra de um produto. |
+| `/excluir_loja` | Exclui uma loja que ainda não possui pedidos. |
+| `/painel_loja` | Alias legado de `/painel`. |
+| `/gerenciar_lojas` | Alias legado de `/loja`. |
 
-1. O cliente usa `/painel` ou abre uma vitrine pública.
-2. Seleciona um ou mais produtos.
-3. Visualiza a prévia com avaliações.
-4. Aceita os termos, se houver.
-5. Informa quantidades e briefing.
-6. O bot cria o pedido, registra itens no banco e abre um atendimento privado.
-7. O lojista controla o fluxo com os botões:
-   - `Em atendimento`
-   - `Concluir`
-   - `Fechar ticket`
-   - `Reabrir`
-   - `Chamar cliente`
-   - `Ver transcript`
-   - `Avaliar atendimento`
+Os comandos funcionam apenas dentro de servidores, não em mensagens diretas.
 
-## Como funciona o sistema de avaliações
+## Pedidos e tickets
 
-1. O comprador conclui o atendimento.
-2. No ticket, o botão `Avaliar atendimento` fica disponível.
-3. O cliente envia nota de 1 a 5 e comentário opcional.
-4. A avaliação é vinculada ao editor responsável.
-5. A média e a quantidade aparecem na loja e na prévia de compra.
-6. Se `FEEDBACK_CHANNEL_ID` estiver configurado, o feedback também vai para o canal.
+O fluxo tenta abrir uma thread privada em `SERVICE_DESK_CHANNEL_ID`. Quando o canal não está configurado ou a criação falha, o bot abre um canal privado na categoria configurada em `TICKET_CATEGORY_ID`; na ausência dela, tenta criar uma categoria exclusiva para o lojista.
 
-## Como funciona o sistema de disponibilidade
+Os estados possíveis são `pendente`, `em_andamento`, `concluido` e `fechado`. Ao concluir ou fechar um atendimento, o bot:
 
-1. Use `/loja`.
-2. Selecione a loja.
-3. Clique em `Status da loja`.
-4. Defina:
-   - se a loja está aberta
-   - a disponibilidade: `disponivel`, `ocupado`, `ausente` ou `fechado`
+- deixa o canal privado em modo de leitura para o cliente;
+- move o canal para `TICKET_ARCHIVE_CATEGORY_ID`, se configurada;
+- salva o histórico de mensagens no banco;
+- publica o evento em `TICKET_LOG_CHANNEL_ID`, se configurado.
 
-O status aparece nas listas e o sistema também mostra a quantidade de pedidos ativos da loja.
+Anexos aparecem no transcript como URLs. O transcript completo pode ser consultado no ticket e é enviado como arquivo quando ultrapassa o limite de uma mensagem.
 
-## Fluxos principais
+## Persistência
 
-- Cliente: `/painel` -> explorar lojas -> selecionar produtos -> comprar -> acompanhar em `Meus pedidos`.
-- Lojista: `/loja` -> criar loja -> criar produtos -> ajustar vitrine/status/termos/tema -> acompanhar histórico e estatísticas.
-- Admin: revisar solicitações no canal configurado e acompanhar logs de tickets/boosts.
+O SQLite contém as tabelas:
 
-## Tabelas do banco
+- `shops` e `products`: lojas, aparência, disponibilidade e catálogo;
+- `orders` e `order_items`: pedidos e seus itens;
+- `order_logs`: eventos do atendimento;
+- `ratings`: avaliações;
+- `term_acceptances`: aceites de termos;
+- `seller_applications`: solicitações e revisões de lojistas;
+- `shop_publications`: mensagens públicas vinculadas às vitrines;
+- `boost_events`: agradecimentos por boost.
 
-- `shops`
-- `products`
-- `orders`
-- `order_items`
-- `order_logs`
-- `ratings`
-- `term_acceptances`
-- `seller_applications`
-- `shop_publications`
-- `boost_events`
+Views persistentes de tickets, solicitações pendentes e vitrines publicadas são registradas novamente quando o bot inicia. Faça backup do arquivo definido em `DATABASE_PATH` antes de atualizar ou alterar dados manualmente.
 
-## Testes rápidos recomendados
+## Validação e desenvolvimento
+
+O projeto não possui uma suíte automatizada de testes. As verificações locais disponíveis são:
 
 ```bash
 python -m py_compile bot.py
 python -c "import bot"
 ```
 
-Depois valide manualmente:
+O segundo comando inicializa a camada de banco e pode aplicar migrações no arquivo configurado. Para uma verificação isolada, use um banco temporário:
 
-1. `/painel` abre sem erro.
-2. `/loja` permite criar loja pelo botão.
-3. Compra com 1 produto funciona.
-4. Compra com múltiplos produtos funciona.
-5. Pedido concluído gera transcript completo.
-6. Recusa de lojista pede motivo e bloqueia nova revisão.
+```powershell
+$env:DATABASE_PATH = "teste-local.db"
+python -c "import bot"
+Remove-Item -LiteralPath "teste-local.db"
+```
+
+Depois, valide em um servidor de testes:
+
+1. sincronização e abertura de `/painel` e `/loja`;
+2. criação, edição, publicação e exclusão de uma loja sem pedidos;
+3. compra com um e com vários produtos;
+4. aceite de termos e bloqueio de loja fechada;
+5. criação de thread e fallback para canal privado;
+6. transições do ticket, transcript e arquivamento;
+7. envio único de avaliação;
+8. aprovação e recusa de solicitação de lojista.
+
+## Deploy na Discloud
+
+O repositório inclui `discloud.config`, configurado para executar `bot.py` com 300 MB de RAM. Cadastre pelo painel da hospedagem as mesmas variáveis do `.env` e inclua no pacote os arquivos necessários:
+
+- `bot.py`;
+- `requirements.txt`;
+- `discloud.config`;
+- o banco SQLite, somente se quiser preservar dados existentes.
+
+O token deve ser configurado como variável segura na hospedagem, nunca incluído no repositório ou no pacote público.
+
+## Estrutura do projeto
+
+```text
+.
+├── bot.py              # bot, interfaces, regras de negócio e acesso ao SQLite
+├── requirements.txt    # dependências Python
+├── discloud.config     # configuração de hospedagem
+├── PROJETO_MAPA.md     # índice técnico de comandos, views e tabelas
+└── README.md            # instalação e operação
+```
