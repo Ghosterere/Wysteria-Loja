@@ -1,4 +1,4 @@
-# LojaDC — marketplace para Discord
+# Loja DC — marketplace para Discord
 
 Bot de marketplace construído com `discord.py`. Ele permite que lojistas criem vitrines e catálogos, recebam pedidos em atendimentos privados e acompanhem histórico, avaliações e estatísticas. Os dados são persistidos localmente em SQLite.
 
