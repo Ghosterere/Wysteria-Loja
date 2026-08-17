@@ -48,9 +48,9 @@
 | Prévia de compra | `ProductPurchaseView` em `bot.py` | Mostra compra antes do modal final | Seleção de produtos |
 | Painel do vendedor | `OwnerShopBrowserView` em `bot.py` | Lista lojas do lojista e permite criar loja | `/loja` |
 | Gestão da loja | `OwnerShopManageView` em `bot.py` | Centraliza personalização, catálogo, histórico, estatísticas e publicação | `/loja` -> selecionar loja |
-| Gestão do catálogo | `OwnerProductManageView` em `bot.py` | Edita, remove e cria produtos | `/loja` -> `Gerenciar catálogo` |
-| Histórico da loja | `OwnerShopHistoryView` em `bot.py` | Mostra pedidos da loja e acesso aos logs | `/loja` -> `Historico` |
-| Estatísticas do editor | `EditorStatsView` em `bot.py` | Mostra total de pedidos, concluídos e tempo médio | `/loja` -> `Estatisticas` |
+| Gestão do catálogo | `OwnerProductManageView` em `bot.py` | Cria, edita, ativa, desativa e remove produtos | `/loja` → `Gerenciar catálogo` |
+| Histórico da loja | `OwnerShopHistoryView` em `bot.py` | Mostra pedidos da loja e acesso aos logs | `/loja` → `Histórico` |
+| Estatísticas do editor | `EditorStatsView` em `bot.py` | Mostra total de pedidos, concluídos e tempo médio | `/loja` → `Estatísticas` |
 | Painel público da loja | `PublicPublishedShopView` em `bot.py` | Post público sincronizado com botão para abrir a loja | `/loja` -> `Divulgar loja` |
 | Aprovação de lojista | `SellerApplicationReviewView` em `bot.py` | Aprova ou recusa solicitações | Canal de solicitações |
 
@@ -59,6 +59,7 @@
 | Nome | Localização no código | Função | Como acessar |
 | --- | --- | --- | --- |
 | `BasePanelView` | `bot.py` | Base com bloqueio por usuário e tratamento de erro | Interno |
+| `SafeModal` | `bot.py` | Base dos formulários com resposta segura para erros esperados e inesperados | Interno |
 | `HomePanelView` | `bot.py` | View do painel principal | `/painel` |
 | `ShopBrowserView` | `bot.py` | Navegação entre lojas | `/painel` |
 | `ShopDetailView` | `bot.py` | Navegação dentro da loja | Seleção de loja |
@@ -99,18 +100,19 @@
 | Cargo `Lojista` | `ensure_lojista_member` em `bot.py` | Exigido para criar e gerenciar lojas | Configurar `LOJISTA_ROLE_NAME` |
 | `Manage Guild` | `SellerApplicationActionButton` e `SellerApplicationRejectModal` em `bot.py` | Aprovar ou recusar lojistas | Botões no canal de solicitações |
 | Dono da loja | Validações em `bot.py` | Só o dono edita loja, produtos e status | Painel `/loja` |
-| Comprador do pedido | `RateOrderButton` e `TranscriptButton` em `bot.py` | Só o comprador avalia e vê transcript próprio | Ticket e pedido |
-| Comprador ou lojista do pedido | `TicketActionButton` em `bot.py` | Uso básico dos controles do ticket | Ticket |
+| Comprador do pedido | `RateOrderButton` em `bot.py` | Só o comprador avalia, uma vez e após conclusão/fechamento | Ticket e pedido |
+| Comprador ou lojista do pedido | `TranscriptButton` em `bot.py` | Consulta o transcript do próprio atendimento | Ticket |
+| Apenas lojista responsável | `TicketActionButton` em `bot.py` | Altera o estado do atendimento | Ticket |
 | Apenas lojista responsável | `CallCustomerButton` em `bot.py` | Menciona o cliente no ticket | Ticket |
 
 ## Canais configuráveis
 
-| Nome | Localização no código | Função | Como acessar |
+| Nome | Tipo | Acesso recomendado | Função |
 | --- | --- | --- | --- |
-| `TICKET_CATEGORY_ID` | leitura no topo de `bot.py` | Categoria usada no fallback de tickets privados por canal | `.env` |
-| `TICKET_ARCHIVE_CATEGORY_ID` | leitura no topo de `bot.py` | Categoria para arquivar tickets | `.env` |
-| `FEEDBACK_CHANNEL_ID` | leitura no topo de `bot.py` | Recebe avaliações publicadas | `.env` |
-| `SERVICE_DESK_CHANNEL_ID` | leitura no topo de `bot.py` | Canal-base para threads privadas | `.env` |
-| `TICKET_LOG_CHANNEL_ID` | leitura no topo de `bot.py` | Recebe logs e preview de transcript | `.env` |
-| `BOOST_THANK_CHANNEL_ID` | leitura no topo de `bot.py` | Recebe mensagens de agradecimento de boost | `.env` |
-| `SELLER_APPLICATION_CHANNEL_ID` | leitura no topo de `bot.py` | Recebe solicitações de lojista | `.env` |
+| `TICKET_CATEGORY_ID` | Categoria | Privado | Fallback de tickets privados por canal. |
+| `TICKET_ARCHIVE_CATEGORY_ID` | Categoria | Privado | Arquiva canais de pedidos concluídos ou fechados. |
+| `FEEDBACK_CHANNEL_ID` | Canal de texto | Aberto | Recebe avaliações publicadas. |
+| `SERVICE_DESK_CHANNEL_ID` | Canal de texto | Aberto | Canal-base para threads privadas; não deve ser fórum. |
+| `TICKET_LOG_CHANNEL_ID` | Canal de texto | Privado | Recebe logs e prévia do transcript. |
+| `BOOST_THANK_CHANNEL_ID` | Canal de texto | Aberto | Recebe mensagens de agradecimento de boost. |
+| `SELLER_APPLICATION_CHANNEL_ID` | Canal de texto | Privado | Recebe portfólios e controles administrativos de solicitações. |
