@@ -7,6 +7,7 @@ Bot de marketplace construído com `discord.py`. Ele permite que lojistas criem 
 - vitrines personalizáveis com emoji, cores, imagens, textos e temas prontos;
 - catálogo dividido por categorias e compra de um ou vários produtos;
 - ativação e desativação de produtos sem apagar o histórico;
+- arquivamento de lojas com pedidos, ocultando-as dos clientes sem apagar pedidos, itens, avaliações ou transcripts;
 - termos obrigatórios com registro do aceite do comprador;
 - disponibilidade da loja e contagem de pedidos ativos;
 - tickets em thread privada, com fallback para canal privado;
@@ -23,7 +24,7 @@ Bot de marketplace construído com `discord.py`. Ele permite que lojistas criem 
 
 - Python 3.12 ou mais recente;
 - um bot criado no Discord Developer Portal;
-- intent privilegiada **Server Members Intent** habilitada;
+- intents privilegiadas **Server Members Intent** e **Message Content Intent** habilitadas;
 - permissões do bot para ver e enviar mensagens, incorporar links, anexar arquivos, ler histórico, criar threads privadas, gerenciar canais, mensagens e cargos.
 
 O cargo do bot deve ficar acima do cargo configurado em `LOJISTA_ROLE_NAME` para que aprovações consigam atribuí-lo.
@@ -101,7 +102,7 @@ Na inicialização, o bot registra avisos no console quando um ID aponta para o 
 
 ## Configuração no Discord
 
-1. No Developer Portal, habilite **Server Members Intent** na página do bot.
+1. No Developer Portal, habilite **Server Members Intent** e **Message Content Intent** na página do bot. O segundo é necessário para salvar o texto completo dos transcripts.
 2. Convide o bot com os escopos `bot` e `applications.commands`.
 3. Conceda as permissões necessárias aos recursos que você pretende usar.
 4. Crie o cargo de lojista e confira se o nome coincide com `LOJISTA_ROLE_NAME`.
@@ -140,7 +141,7 @@ O dono de uma loja não pode comprar nela, exceto quando seu ID estiver em `ADMI
 ### Fluxo do lojista
 
 1. Obtenha o cargo configurado em `LOJISTA_ROLE_NAME`.
-2. Use `/loja` e clique em **Criar loja**.
+2. Use `/painel_loja` e clique em **Criar loja**.
 3. Selecione a loja para personalizar a vitrine, definir termos e status e administrar o catálogo.
 4. No catálogo, produtos desativados deixam de aparecer para clientes e podem ser reativados depois.
 5. Use **Divulgar loja** para publicar uma vitrine em um canal.
@@ -162,8 +163,7 @@ Uma pessoa só pode ter uma solicitação pendente. Se o canal estiver inacessí
 | Comando | Finalidade |
 | --- | --- |
 | `/painel` | Abre a central do cliente. |
-| `/loja` | Abre a central de gerenciamento do lojista. |
-| `/lojas` | Lista as lojas do servidor e seus IDs. |
+| `/painel_loja` | Abre a central de gerenciamento do lojista, incluindo lojas arquivadas e histórico. |
 | `/ver_loja` | Abre uma vitrine pelo ID. |
 | `/meus_pedidos` | Lista pedidos feitos pelo usuário. |
 | `/pedidos_loja` | Lista pedidos recebidos pelo lojista. |
@@ -177,8 +177,6 @@ Uma pessoa só pode ter uma solicitação pendente. Se o canal estiver inacessí
 | `/alterar_preco` | Atualiza o preço de um produto. |
 | `/comprar_produto` | Inicia diretamente a compra de um produto. |
 | `/excluir_loja` | Exclui uma loja que ainda não possui pedidos. |
-| `/painel_loja` | Alias legado de `/painel`. |
-| `/gerenciar_lojas` | Alias legado de `/loja`. |
 
 Os comandos funcionam apenas dentro de servidores, não em mensagens diretas.
 
@@ -216,6 +214,8 @@ Views persistentes de tickets, solicitações pendentes e vitrines publicadas s�
 
 As migrações preservam o histórico. Referências antigas a produtos já removidos são convertidas em `NULL`, e os pedidos continuam exibindo `[produto removido]`. IDs públicos possuem unicidade por servidor e candidaturas mantêm apenas uma entrada pendente por usuário.
 
+Lojas que já receberam qualquer pedido não podem ser excluídas. No `/painel_loja`, a ação passa a ser **Arquivar loja**: ela sai do marketplace e das vitrines públicas, mas continua disponível ao lojista para consulta do histórico e pode ser reativada.
+
 ## Validação e desenvolvimento
 
 A suíte automatizada cobre preços, pedidos com vários produtos, totais, transições, avaliações, candidaturas, persistência de tickets e reparo de referências antigas:
@@ -234,9 +234,11 @@ $env:DATABASE_PATH = "$env:TEMP\lojadc-import.db"
 Remove-Item -LiteralPath "$env:TEMP\lojadc-import.db"
 ```
 
+O roteiro detalhado, com resultado esperado, sinais de erro e ponto provável no código, está em [`CHECKLIST_DISCORD.md`](CHECKLIST_DISCORD.md).
+
 Depois, valide em um servidor de testes:
 
-1. sincronização e abertura de `/painel` e `/loja`;
+1. sincronização e abertura de `/painel` e `/painel_loja`;
 2. criação, edição, publicação e exclusão de uma loja sem pedidos;
 3. compra com um e com vários produtos;
 4. aceite de termos e bloqueio de loja fechada;
@@ -260,21 +262,25 @@ Antes de atualizar:
 
 Nunca restaure apenas arquivos `-wal` ou `-shm`; o backup principal é o arquivo `.db` com o bot parado.
 
-## Deploy
+## Deploy na Square Cloud
 
-Este repositório não inclui atualmente um arquivo específico de hospedagem. Configure na plataforma escolhida:
+O arquivo `squarecloud.app` na raiz configura o deploy com:
 
-- comando de instalação: `python -m pip install -r requirements.txt`;
-- comando de início: `python bot.py`;
-- Python 3.12 ou mais recente;
-- armazenamento persistente para o arquivo SQLite;
-- todas as variáveis de `.env.example` em um cofre de variáveis da plataforma.
+- arquivo principal `bot.py` (início automático com `python bot.py`);
+- Python na versão recomendada pela Square Cloud;
+- 512 MB de memória;
+- reinício automático em caso de falha.
 
-O token deve ser configurado como variável segura na hospedagem, nunca incluído no repositório ou no pacote público.
+A Square Cloud instala automaticamente as dependências de `requirements.txt`. Antes de iniciar o bot, cadastre no painel as variáveis listadas em `.env.example`; `DISCORD_TOKEN` é a única obrigatória para a conexão, e as demais habilitam ou direcionam recursos específicos do servidor.
+
+O banco SQLite não faz parte do Git. Configure `DATABASE_PATH` para um caminho em armazenamento persistente da aplicação e preserve esse volume entre os deploys. Sem persistência, lojas, produtos, pedidos e tickets podem ser perdidos quando a aplicação for recriada.
+
+Nunca envie `.env`, token, banco ou backup no repositório ou no pacote público.
 
 ## Solução de problemas
 
 - `ModuleNotFoundError: No module named 'discord'`: use `.\.venv\Scripts\python.exe bot.py` ou instale `requirements.txt` nesse ambiente.
+- desconexão `4014` ou transcripts com `[sem texto]`: habilite **Server Members Intent** e **Message Content Intent** no Developer Portal.
 - comandos `/` não aparecem: confirme `GUILD_ID`, o escopo `applications.commands` e os avisos de sincronização no console.
 - thread não é criada: confirme que a mesa é um canal de texto e conceda **Criar threads privadas**, **Enviar mensagens em threads** e **Gerenciar threads**.
 - ticket privado não é criado: conceda **Gerenciar canais** e confira `TICKET_CATEGORY_ID`.
@@ -287,6 +293,7 @@ O token deve ser configurado como variável segura na hospedagem, nunca incluíd
 .
 ├── bot.py              # bot, interfaces, regras de negócio e acesso ao SQLite
 ├── .env.example        # modelo seguro de configuração
+├── squarecloud.app     # configuração de execução na Square Cloud
 ├── requirements.txt    # dependências Python
 ├── tests/              # testes automatizados dos invariantes principais
 ├── PROJETO_MAPA.md     # índice técnico de comandos, views e tabelas

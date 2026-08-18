@@ -1,4 +1,9 @@
+# Variáveis locais e segredos
 .env
+.env.*
+!.env.example
+
+# Bancos SQLite, arquivos auxiliares e backups
 *.db
 *.sqlite
 *.sqlite3
@@ -6,13 +11,41 @@
 *.db-shm
 *.sqlite-wal
 *.sqlite-shm
-*.log
+*.db-journal
+*.sqlite-journal
+*.sqlite3-journal
+*.backup
+*.bak
+*.dump
+
+# Python, testes, cobertura e análise estática
 __pycache__/
 *.py[cod]
+*$py.class
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+.coverage.*
+htmlcov/
+
+# Ambientes virtuais
 .venv/
 venv/
-.pytest_cache/
-.coverage
-htmlcov/
-.env.*
-!.env.example
+env/
+ENV/
+
+# Logs e temporários
+*.log
+logs/
+*.tmp
+*.temp
+*.swp
+*.swo
+*~
+
+# Sistema operacional e editores locais
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
