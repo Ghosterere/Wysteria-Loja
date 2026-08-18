@@ -139,6 +139,7 @@ class Shop:
     terms_text: str | None
     is_open: bool
     availability_status: str
+    active: bool
     accent_color: str | None
     image_url: str | None
     banner_url: str | None
@@ -427,6 +428,7 @@ class StoreDatabase:
             self._ensure_column(db, "shops", "accent_color", "TEXT")
             self._ensure_column(db, "shops", "image_url", "TEXT")
             self._ensure_column(db, "shops", "banner_url", "TEXT")
+            self._ensure_column(db, "shops", "active", "INTEGER NOT NULL DEFAULT 1")
             db.execute(
                 """
                 CREATE TABLE IF NOT EXISTS products (
@@ -683,6 +685,16 @@ class StoreDatabase:
                 "CREATE INDEX IF NOT EXISTS idx_shop_publications_shop_id ON shop_publications(shop_id)"
             )
             db.execute(
+                """
+                CREATE TRIGGER IF NOT EXISTS protect_shop_order_history
+                BEFORE DELETE ON shops
+                WHEN EXISTS (SELECT 1 FROM orders WHERE orders.shop_id = OLD.id)
+                BEGIN
+                    SELECT RAISE(ABORT, 'shop_has_order_history');
+                END
+                """
+            )
+            db.execute(
                 "CREATE INDEX IF NOT EXISTS idx_seller_applications_status_created ON seller_applications(status, created_at DESC)"
             )
             db.execute(
@@ -754,7 +766,7 @@ class StoreDatabase:
             row = db.execute(
                 """
                 SELECT id AS db_id, public_id, guild_id, owner_id, name, description, shop_emoji, theme_name, buy_button_text,
-                       headline, subtitle, highlights, terms_text, is_open, availability_status, accent_color, image_url, banner_url
+                       headline, subtitle, highlights, terms_text, is_open, availability_status, accent_color, image_url, banner_url, active
                 FROM shops
                 WHERE guild_id = ? AND public_id = ?
                 """,
@@ -780,6 +792,7 @@ class StoreDatabase:
             terms_text=str(row["terms_text"]) if row["terms_text"] else None,
             is_open=bool(row["is_open"]),
             availability_status=str(row["availability_status"] or "disponivel"),
+            active=bool(row["active"]),
             accent_color=str(row["accent_color"]) if row["accent_color"] else None,
             image_url=str(row["image_url"]) if row["image_url"] else None,
             banner_url=str(row["banner_url"]) if row["banner_url"] else None,
@@ -791,13 +804,13 @@ class StoreDatabase:
                 """
                 SELECT s.id AS db_id, s.public_id AS id, s.name, s.description, s.owner_id, s.shop_emoji, s.theme_name, s.buy_button_text,
                        s.headline, s.subtitle, s.highlights, s.terms_text, s.is_open, s.availability_status,
-                       s.accent_color, s.image_url, s.banner_url,
+                       s.accent_color, s.image_url, s.banner_url, s.active,
                        COUNT(DISTINCT p.id) AS product_count,
                        COUNT(DISTINCT CASE WHEN o.status NOT IN ('concluido', 'fechado') THEN o.id END) AS active_order_count
                 FROM shops s
                 LEFT JOIN products p ON p.shop_id = s.id AND p.active = 1
                 LEFT JOIN orders o ON o.shop_id = s.id
-                WHERE s.guild_id = ?
+                WHERE s.guild_id = ? AND s.active = 1
                 GROUP BY s.id
                 ORDER BY s.name COLLATE NOCASE
                 """,
@@ -1100,9 +1113,29 @@ class StoreDatabase:
             ).fetchone()
             if existing_orders is not None:
                 return False
+            try:
+                cursor = db.execute(
+                    "DELETE FROM shops WHERE guild_id = ? AND public_id = ? AND owner_id = ?",
+                    (guild_id, shop_id, owner_id),
+                )
+            except sqlite3.IntegrityError as exc:
+                if "shop_has_order_history" in str(exc):
+                    return False
+                raise
+            return cursor.rowcount > 0
+
+    def set_shop_active(
+        self, guild_id: int, shop_id: int, owner_id: int, active: bool
+    ) -> bool:
+        """Arquiva/restaura uma loja sem remover seu grafo de histórico."""
+        with self.connection() as db:
             cursor = db.execute(
-                "DELETE FROM shops WHERE guild_id = ? AND public_id = ? AND owner_id = ?",
-                (guild_id, shop_id, owner_id),
+                """
+                UPDATE shops
+                SET active = ?, is_open = CASE WHEN ? = 0 THEN 0 ELSE is_open END
+                WHERE guild_id = ? AND public_id = ? AND owner_id = ?
+                """,
+                (1 if active else 0, 1 if active else 0, guild_id, shop_id, owner_id),
             )
             return cursor.rowcount > 0
 
@@ -1152,7 +1185,7 @@ class StoreDatabase:
                 """
                 SELECT s.id AS db_id, s.public_id AS id, s.name, s.description, s.owner_id, s.shop_emoji, s.theme_name, s.buy_button_text,
                        s.headline, s.subtitle, s.highlights, s.terms_text, s.is_open, s.availability_status,
-                       s.accent_color, s.image_url, s.banner_url,
+                       s.accent_color, s.image_url, s.banner_url, s.active,
                        COUNT(DISTINCT p.id) AS product_count,
                        COUNT(DISTINCT CASE WHEN o.status NOT IN ('concluido', 'fechado') THEN o.id END) AS active_order_count
                 FROM shops s
@@ -1547,7 +1580,9 @@ class StoreDatabase:
         with self.connection() as db:
             return db.execute(
                 """
-                SELECT o.id AS db_id, o.public_id AS id, o.buyer_id, o.status, o.ticket_channel_id, o.service_message_id, s.owner_id AS shop_owner_id
+                SELECT o.id AS db_id, o.public_id AS id, o.buyer_id, o.status,
+                       o.ticket_channel_id, o.service_message_id,
+                       o.assigned_editor_id, s.owner_id AS shop_owner_id
                 FROM orders o
                 JOIN shops s ON s.id = o.shop_id
                 WHERE o.ticket_channel_id IS NOT NULL
@@ -1748,6 +1783,7 @@ store_db = StoreDatabase(DATABASE_PATH)
 intents = discord.Intents.default()
 intents.guilds = True
 intents.members = True
+intents.message_content = True
 bot = commands.Bot(
     command_prefix="!",
     intents=intents,
@@ -2644,7 +2680,9 @@ def build_owner_shop_embed(shops: list[sqlite3.Row]) -> discord.Embed:
         return embed
     embed.add_field(
         name="Resumo",
-        value=build_stat_block("Suas lojas", str(len(shops))),
+        value=build_stat_block(
+            "Lojas ativas", str(sum(1 for shop in shops if bool(shop["active"])))
+        ),
         inline=True,
     )
     total_products = sum(int(shop["product_count"]) for shop in shops)
@@ -2666,7 +2704,8 @@ def build_owner_shop_embed(shops: list[sqlite3.Row]) -> discord.Embed:
     lines = []
     for shop in shops[:8]:
         lines.append(
-            f"`#{shop['id']}` **{row_shop_title(shop)}**\n"
+            f"`#{shop['id']}` **{row_shop_title(shop)}**"
+            f"{' • Arquivada' if not bool(shop['active']) else ''}\n"
             f"Produtos: {shop['product_count']} • Tema: {row_theme_label(shop)} • {row_shop_status_text(shop)}"
         )
     embed.add_field(
@@ -3083,7 +3122,7 @@ async def create_order_and_ticket(
 ) -> tuple[int, int, discord.abc.GuildChannel | None]:
     guild_id = guild_only_interaction(interaction)
     fresh_shop = store_db.get_shop(guild_id, shop.id)
-    if fresh_shop is None:
+    if fresh_shop is None or not fresh_shop.active:
         raise app_commands.AppCommandError("Esta loja não está mais disponível.")
     shop = fresh_shop
     if interaction.user.id == shop.owner_id and not is_admin_tester(
@@ -3569,7 +3608,7 @@ class OpenPurchaseButton(discord.ui.Button):
         super().__init__(
             label=shop_buy_button_text(shop),
             style=discord.ButtonStyle.success,
-            disabled=not shop.is_open,
+            disabled=not shop.is_open or not shop.active,
         )
         self.shop = shop
         self.products = products
@@ -3628,7 +3667,7 @@ class ShopDetailRefreshButton(discord.ui.Button):
     async def callback(self, interaction: discord.Interaction) -> None:
         guild_id = guild_only_interaction(interaction)
         shop = store_db.get_shop(guild_id, self.shop_id)
-        if shop is None:
+        if shop is None or not shop.active:
             shops = store_db.list_shops(guild_id)
             await interaction.response.edit_message(
                 embed=build_shop_browser_embed(shops),
@@ -4001,13 +4040,13 @@ class ShopTermsModal(SafeModal):
             )
             return
         products = store_db.list_products(guild_id, shop.id)
-        await sync_shop_public_panels(shop)
         await interaction.response.send_message(
             "Termos atualizados com sucesso.",
             embed=build_shop_panel_embed(shop, products),
             view=OwnerShopManageView(interaction.user.id, shop, products),
             ephemeral=True,
         )
+        await sync_shop_public_panels(shop)
 
 
 class ShopStatusModal(SafeModal):
@@ -4074,13 +4113,13 @@ class ShopStatusModal(SafeModal):
             )
             return
         products = store_db.list_products(guild_id, shop.id)
-        await sync_shop_public_panels(shop)
         await interaction.response.send_message(
             f"Status atualizado para **{shop_status_text(shop)}**.",
             embed=build_shop_panel_embed(shop, products),
             view=OwnerShopManageView(interaction.user.id, shop, products),
             ephemeral=True,
         )
+        await sync_shop_public_panels(shop)
 
 
 class ThemePresetSelect(discord.ui.Select):
@@ -4128,12 +4167,12 @@ class ThemePresetSelect(discord.ui.Select):
             )
             return
         products = store_db.list_products(guild_id, shop.id)
-        await sync_shop_public_panels(shop)
         await interaction.response.edit_message(
             content=f"Tema **{updates['theme_name']}** aplicado com sucesso.",
             embed=build_shop_panel_embed(shop, products),
             view=OwnerShopManageView(interaction.user.id, shop, products),
         )
+        await sync_shop_public_panels(shop)
 
 
 class ThemePresetView(BasePanelView):
@@ -4679,6 +4718,32 @@ class DeleteShopConfirmView(discord.ui.View):
     ) -> None:
         guild_id = guild_only_interaction(interaction)
         publications = store_db.list_shop_publications(self.shop.db_id)
+        if store_db.shop_has_orders(guild_id, self.shop.id, interaction.user.id):
+            archived = store_db.set_shop_active(
+                guild_id, self.shop.id, interaction.user.id, False
+            )
+            if not archived:
+                await interaction.response.send_message(
+                    "Não consegui arquivar a loja.", ephemeral=True
+                )
+                return
+            await interaction.response.defer()
+            await delete_shop_public_messages(publications)
+            for publication in publications:
+                store_db.delete_shop_publication(
+                    self.shop.db_id, int(publication["channel_id"])
+                )
+            shops = store_db.list_shops_for_owner(guild_id, interaction.user.id)
+            await interaction.message.edit(
+                content="Loja arquivada. Todo o histórico foi preservado.",
+                embed=build_owner_shop_embed(shops),
+                view=OwnerShopBrowserView(interaction.user.id, shops),
+            )
+            await interaction.followup.send(
+                "Loja arquivada e removida do marketplace. O histórico continua acessível.",
+                ephemeral=True,
+            )
+            return
         deleted = store_db.delete_shop(guild_id, self.shop.id, interaction.user.id)
         if not deleted:
             if store_db.shop_has_orders(guild_id, self.shop.id, interaction.user.id):
@@ -4797,16 +4862,57 @@ class OpenManageProductsButton(discord.ui.Button):
 
 class DeleteShopButton(discord.ui.Button):
     def __init__(self, shop: Shop) -> None:
+        has_history = store_db.shop_has_orders(shop.guild_id, shop.id, shop.owner_id)
         super().__init__(
-            label="Excluir vitrine", style=discord.ButtonStyle.danger, row=3
+            label="Arquivar loja" if has_history else "Excluir vitrine",
+            style=discord.ButtonStyle.secondary
+            if has_history
+            else discord.ButtonStyle.danger,
+            row=3,
+        )
+        self.shop = shop
+        self.has_history = has_history
+
+    async def callback(self, interaction: discord.Interaction) -> None:
+        await interaction.response.send_message(
+            (
+                f"Tem certeza que deseja arquivar **{self.shop.name}**? Ela sairá do marketplace, mas pedidos, itens, avaliações e transcripts serão preservados."
+                if self.has_history
+                else f"Tem certeza que deseja excluir **{self.shop.name}**? Esta ação só é permitida porque não há pedidos no histórico."
+            ),
+            view=DeleteShopConfirmView(interaction.user.id, self.shop),
+            ephemeral=True,
+        )
+
+
+class RestoreShopButton(discord.ui.Button):
+    def __init__(self, shop: Shop) -> None:
+        super().__init__(
+            label="Reativar loja", style=discord.ButtonStyle.success, row=3
         )
         self.shop = shop
 
     async def callback(self, interaction: discord.Interaction) -> None:
-        await interaction.response.send_message(
-            f"Tem certeza que deseja excluir **{self.shop.name}**? Lojas com histórico de pedidos não podem ser excluídas.",
-            view=DeleteShopConfirmView(interaction.user.id, self.shop),
-            ephemeral=True,
+        guild_id = guild_only_interaction(interaction)
+        restored = store_db.set_shop_active(
+            guild_id, self.shop.id, interaction.user.id, True
+        )
+        if not restored:
+            await interaction.response.send_message(
+                "Não consegui reativar a loja.", ephemeral=True
+            )
+            return
+        shop = store_db.get_shop(guild_id, self.shop.id)
+        if shop is None:
+            await interaction.response.send_message(
+                "A loja foi reativada, mas não pôde ser recarregada.", ephemeral=True
+            )
+            return
+        products = store_db.list_products(guild_id, shop.id, include_inactive=True)
+        await interaction.response.edit_message(
+            content="Loja reativada. Revise o status antes de aceitar novos pedidos.",
+            embed=build_shop_panel_embed(shop, products),
+            view=OwnerShopManageView(interaction.user.id, shop, products),
         )
 
 
@@ -5134,16 +5240,27 @@ class OwnerShopManageView(BasePanelView):
         self.add_item(OpenBioButton(shop))
         self.add_item(OpenShopHistoryButton(shop))
         self.add_item(OpenEditorStatsButton(shop))
-        self.add_item(PublishShopButton(shop))
-        self.add_item(DeleteShopButton(shop))
+        if shop.active:
+            self.add_item(PublishShopButton(shop))
+            self.add_item(DeleteShopButton(shop))
+        else:
+            self.add_item(RestoreShopButton(shop))
         self.add_item(ShopDetailRefreshButton(shop.id, "Todos", 0))
 
 
 class TermsAcceptanceButton(discord.ui.Button):
-    def __init__(self, shop: Shop, products: list[sqlite3.Row]) -> None:
+    def __init__(
+        self,
+        shop: Shop,
+        products: list[sqlite3.Row],
+        default_quantities: dict[int, int] | None = None,
+        default_details: str = "",
+    ) -> None:
         super().__init__(label="Aceitar e continuar", style=discord.ButtonStyle.success)
         self.shop = shop
         self.products = products
+        self.default_quantities = default_quantities or {}
+        self.default_details = default_details
 
     async def callback(self, interaction: discord.Interaction) -> None:
         guild_id = guild_only_interaction(interaction)
@@ -5153,20 +5270,43 @@ class TermsAcceptanceButton(discord.ui.Button):
             )
         await interaction.response.send_modal(
             PurchaseModal(
-                self.shop, self.products, accepted_terms_text=self.shop.terms_text
+                self.shop,
+                self.products,
+                accepted_terms_text=self.shop.terms_text,
+                default_quantities=self.default_quantities,
+                default_details=self.default_details,
             )
         )
 
 
 class TermsAcceptanceView(BasePanelView):
-    def __init__(self, shop: Shop, products: list[sqlite3.Row], viewer_id: int) -> None:
+    def __init__(
+        self,
+        shop: Shop,
+        products: list[sqlite3.Row],
+        viewer_id: int,
+        default_quantities: dict[int, int] | None = None,
+        default_details: str = "",
+    ) -> None:
         super().__init__(viewer_id)
-        self.add_item(TermsAcceptanceButton(shop, products))
+        self.add_item(
+            TermsAcceptanceButton(
+                shop,
+                products,
+                default_quantities=default_quantities,
+                default_details=default_details,
+            )
+        )
 
 
 class PurchaseModal(SafeModal):
     def __init__(
-        self, shop: Shop, products: list[sqlite3.Row], accepted_terms_text: str | None
+        self,
+        shop: Shop,
+        products: list[sqlite3.Row],
+        accepted_terms_text: str | None,
+        default_quantities: dict[int, int] | None = None,
+        default_details: str = "",
     ) -> None:
         title_target = (
             str(products[0]["name"]) if len(products) == 1 else f"{len(products)} itens"
@@ -5176,10 +5316,14 @@ class PurchaseModal(SafeModal):
         self.products = products
         self.accepted_terms_text = accepted_terms_text
 
+        quantities = default_quantities or {}
         default_quantity = (
-            "1"
+            str(quantities.get(int(products[0]["id"]), 1))
             if len(products) == 1
-            else ", ".join(f"{int(product['id'])}=1" for product in products)
+            else ", ".join(
+                f"{int(product['id'])}={quantities.get(int(product['id']), 1)}"
+                for product in products
+            )
         )
         quantity_label = "Quantidade" if len(products) == 1 else "Quantidades por item"
         quantity_placeholder = "Ex: 1" if len(products) == 1 else "Ex: 12=1, 14=2, 18=1"
@@ -5192,6 +5336,7 @@ class PurchaseModal(SafeModal):
         self.details = discord.ui.TextInput(
             label="Briefing do pedido",
             placeholder="Explique o que você precisa, prazo, referências e observações...",
+            default=default_details[:400],
             required=False,
             style=discord.TextStyle.paragraph,
             max_length=400,
@@ -5425,11 +5570,12 @@ class RateOrderButton(discord.ui.Button):
 
 
 class CallCustomerButton(discord.ui.Button):
-    def __init__(self, order_db_id: int, buyer_id: int) -> None:
+    def __init__(self, order_db_id: int, buyer_id: int, disabled: bool = False) -> None:
         super().__init__(
             label="Chamar cliente",
             style=discord.ButtonStyle.secondary,
             custom_id=f"ticket:call:{order_db_id}",
+            disabled=disabled,
         )
         self.buyer_id = buyer_id
 
@@ -5439,7 +5585,14 @@ class CallCustomerButton(discord.ui.Button):
             if isinstance(self.view, TicketControlsView)
             else None
         )
-        if order is None or interaction.user.id != int(order["shop_owner_id"]):
+        responsible_id = (
+            int(order["assigned_editor_id"])
+            if order is not None and order["assigned_editor_id"] is not None
+            else int(order["shop_owner_id"])
+            if order is not None
+            else 0
+        )
+        if order is None or interaction.user.id != responsible_id:
             await interaction.response.send_message(
                 "Somente o lojista responsável pode chamar o cliente.", ephemeral=True
             )
@@ -5466,7 +5619,8 @@ class TranscriptButton(discord.ui.Button):
                 "Pedido não encontrado.", ephemeral=True
             )
             return
-        allowed_ids = {int(order["buyer_id"]), int(order["shop_owner_id"])}
+        responsible_id = int(order["assigned_editor_id"] or order["shop_owner_id"])
+        allowed_ids = {int(order["buyer_id"]), responsible_id}
         if interaction.user.id not in allowed_ids:
             await interaction.response.send_message(
                 "Você não pode acessar o transcript deste pedido.", ephemeral=True
@@ -5488,6 +5642,73 @@ class TranscriptButton(discord.ui.Button):
         await interaction.response.send_message(
             "Transcript completo em anexo.", file=transcript_file, ephemeral=True
         )
+
+
+async def reopen_ticket_on_discord(
+    guild: discord.Guild,
+    order: sqlite3.Row,
+    fallback_channel: discord.TextChannel | discord.Thread | None,
+) -> discord.TextChannel | discord.Thread:
+    """Reabre o recurso real antes de permitir que o SQLite avance para pendente."""
+    channel_id = int(order["ticket_channel_id"] or 0)
+    channel = guild.get_channel_or_thread(channel_id) if channel_id else fallback_channel
+    if channel is None and channel_id:
+        try:
+            fetched = await guild.fetch_channel(channel_id)
+            if isinstance(fetched, (discord.TextChannel, discord.Thread)):
+                channel = fetched
+        except (discord.NotFound, discord.Forbidden, discord.HTTPException):
+            channel = None
+    if not isinstance(channel, (discord.TextChannel, discord.Thread)):
+        raise app_commands.AppCommandError(
+            "O canal deste ticket não foi encontrado; o status não foi alterado."
+        )
+
+    buyer_id = int(order["buyer_id"])
+    owner_id = int(order["assigned_editor_id"] or order["shop_owner_id"])
+    members: list[discord.Member] = []
+    for member_id in {buyer_id, owner_id}:
+        member = guild.get_member(member_id)
+        if member is None:
+            try:
+                member = await guild.fetch_member(member_id)
+            except (discord.NotFound, discord.Forbidden, discord.HTTPException) as exc:
+                raise app_commands.AppCommandError(
+                    "Não consegui restaurar cliente e vendedor no ticket; o status não foi alterado."
+                ) from exc
+        members.append(member)
+
+    try:
+        if isinstance(channel, discord.Thread):
+            await channel.edit(
+                archived=False,
+                locked=False,
+                reason=f"Ticket #{order['id']} reaberto",
+            )
+            for member in members:
+                await channel.add_user(member)
+        else:
+            buyer = next(member for member in members if member.id == buyer_id)
+            owner = next(member for member in members if member.id == owner_id)
+            await set_ticket_participants_visibility(
+                channel,
+                buyer,
+                owner,
+                buyer_visible=True,
+                buyer_can_send=True,
+                owner_can_send=True,
+            )
+            active_category = resolve_ticket_category(guild, None)
+            if active_category is not None and channel.category_id != active_category.id:
+                await channel.edit(
+                    category=active_category,
+                    reason=f"Ticket #{order['id']} reaberto",
+                )
+    except (discord.Forbidden, discord.HTTPException) as exc:
+        raise app_commands.AppCommandError(
+            "O Discord não permitiu desbloquear o ticket; o status não foi alterado."
+        ) from exc
+    return channel
 
 
 class TicketActionButton(discord.ui.Button):
@@ -5516,7 +5737,7 @@ class TicketActionButton(discord.ui.Button):
             return
 
         user_id = interaction.user.id
-        owner_id = int(order["shop_owner_id"])
+        owner_id = int(order["assigned_editor_id"] or order["shop_owner_id"])
         buyer_id = int(order["buyer_id"])
         if user_id not in {owner_id, buyer_id}:
             await interaction.response.send_message(
@@ -5571,6 +5792,25 @@ class TicketActionButton(discord.ui.Button):
             return
 
         await interaction.response.defer()
+        prepared_channel: discord.TextChannel | discord.Thread | None = None
+        if self.action == "reopen":
+            if interaction.guild is None:
+                await interaction.followup.send(
+                    "Não foi possível localizar o servidor deste ticket.", ephemeral=True
+                )
+                return
+            fallback_channel = (
+                interaction.channel
+                if isinstance(interaction.channel, (discord.TextChannel, discord.Thread))
+                else None
+            )
+            try:
+                prepared_channel = await reopen_ticket_on_discord(
+                    interaction.guild, order, fallback_channel
+                )
+            except app_commands.AppCommandError as exc:
+                await interaction.followup.send(str(exc), ephemeral=True)
+                return
         changed = store_db.update_order_status(
             self.order_id, next_status, allowed_statuses
         )
@@ -5587,28 +5827,18 @@ class TicketActionButton(discord.ui.Button):
             )
             return
 
-        channel: discord.TextChannel | discord.Thread | None = None
-        if interaction.channel and isinstance(
+        channel: discord.TextChannel | discord.Thread | None = prepared_channel
+        if channel is None and interaction.channel and isinstance(
             interaction.channel, (discord.TextChannel, discord.Thread)
         ):
             channel = interaction.channel
+        if channel is not None:
             buyer = (
                 interaction.guild.get_member(buyer_id) if interaction.guild else None
             )
             owner = (
                 interaction.guild.get_member(owner_id) if interaction.guild else None
             )
-            if self.action == "reopen" and isinstance(channel, discord.Thread):
-                try:
-                    await channel.edit(
-                        archived=False,
-                        locked=False,
-                        reason=f"Ticket #{updated['id']} reaberto",
-                    )
-                except (discord.Forbidden, discord.HTTPException):
-                    logger.warning(
-                        "Falha ao reabrir a thread do pedido #%s.", updated["id"]
-                    )
             if (
                 buyer is not None
                 and owner is not None
@@ -5639,27 +5869,7 @@ class TicketActionButton(discord.ui.Button):
                         updated["id"],
                     )
             if (
-                self.action == "reopen"
-                and interaction.guild
-                and isinstance(channel, discord.TextChannel)
-            ):
-                active_category = resolve_ticket_category(interaction.guild, None)
-                if (
-                    active_category is not None
-                    and channel.category_id != active_category.id
-                ):
-                    try:
-                        await channel.edit(
-                            category=active_category,
-                            reason=f"Ticket #{updated['id']} reaberto",
-                        )
-                    except (discord.Forbidden, discord.HTTPException):
-                        logger.warning(
-                            "Falha ao mover o ticket reaberto #%s para a categoria ativa.",
-                            updated["id"],
-                        )
-            if (
-                next_status in {"concluido", "fechado"}
+                next_status == "fechado"
                 and interaction.guild
                 and isinstance(channel, discord.TextChannel)
             ):
@@ -5714,7 +5924,7 @@ class TicketActionButton(discord.ui.Button):
                     "Não foi possível notificar o comprador no ticket #%s reaberto.",
                     updated["id"],
                 )
-        elif next_status in {"concluido", "fechado"} and isinstance(
+        elif next_status == "fechado" and isinstance(
             channel, discord.Thread
         ):
             try:
@@ -5781,7 +5991,9 @@ class TicketControlsView(discord.ui.View):
                 disabled=status != "fechado",
             )
         )
-        self.add_item(CallCustomerButton(order_db_id, buyer_id))
+        self.add_item(
+            CallCustomerButton(order_db_id, buyer_id, disabled=status == "fechado")
+        )
         self.add_item(TranscriptButton(order_db_id))
         self.add_item(RateOrderButton(order))
 
@@ -5810,7 +6022,7 @@ class TicketControlsView(discord.ui.View):
         return cls(
             order_db_id=int(order["db_id"]),
             buyer_id=int(order["buyer_id"]),
-            owner_id=int(order["shop_owner_id"]),
+            owner_id=int(order["assigned_editor_id"] or order["shop_owner_id"]),
             status=str(order["status"]),
             order=order,
         )
@@ -5931,6 +6143,16 @@ def validate_guild_configuration(guild: discord.Guild) -> None:
         return
     validated_configuration_guilds.add(guild.id)
     bot_member = guild.me
+    if bot_member is not None:
+        global_permissions = bot_member.guild_permissions
+        if not global_permissions.manage_channels:
+            logger.warning(
+                "Configuração: falta Gerenciar Canais para criar o fallback privado de tickets."
+            )
+        if not global_permissions.manage_roles:
+            logger.warning(
+                "Configuração: falta Gerenciar Cargos para aprovar solicitações de lojista."
+            )
     role = find_lojista_role(guild)
     if role is None:
         logger.warning(
@@ -5949,12 +6171,18 @@ def validate_guild_configuration(guild: discord.Guild) -> None:
         "TICKET_ARCHIVE_CATEGORY_ID": TICKET_ARCHIVE_CATEGORY_ID,
     }
     for setting_name, channel_id in category_settings.items():
-        if channel_id is not None and not isinstance(
-            guild.get_channel(channel_id), discord.CategoryChannel
-        ):
+        if channel_id is None:
+            continue
+        category = guild.get_channel(channel_id)
+        if not isinstance(category, discord.CategoryChannel):
             logger.warning(
                 "Configuração: %s não aponta para uma categoria acessível neste servidor.",
                 setting_name,
+            )
+            continue
+        if category.permissions_for(guild.default_role).view_channel:
+            logger.warning(
+                "Configuração: %s deve ficar oculta para @everyone.", setting_name
             )
 
     channel_settings = {
@@ -5977,11 +6205,23 @@ def validate_guild_configuration(guild: discord.Guild) -> None:
         if bot_member is None:
             continue
         permissions = channel.permissions_for(bot_member)
-        required = ["view_channel", "send_messages", "embed_links"]
+        required = ["view_channel", "send_messages"]
         if setting_name == "SERVICE_DESK_CHANNEL_ID":
             required.extend(
-                ["create_private_threads", "send_messages_in_threads", "manage_threads"]
+                [
+                    "read_message_history",
+                    "embed_links",
+                    "attach_files",
+                    "create_private_threads",
+                    "send_messages_in_threads",
+                    "manage_threads",
+                ]
             )
+        elif setting_name in {
+            "TICKET_LOG_CHANNEL_ID",
+            "SELLER_APPLICATION_CHANNEL_ID",
+        }:
+            required.extend(["read_message_history", "embed_links"])
         missing = [
             permission
             for permission in required
@@ -5992,6 +6232,19 @@ def validate_guild_configuration(guild: discord.Guild) -> None:
                 "Configuração: faltam permissões em %s: %s.",
                 setting_name,
                 ", ".join(missing),
+            )
+
+        if (
+            setting_name
+            in {
+                "TICKET_LOG_CHANNEL_ID",
+                "SELLER_APPLICATION_CHANNEL_ID",
+            }
+            and channel.permissions_for(guild.default_role).view_channel
+        ):
+            logger.warning(
+                "Configuração: %s contém dados administrativos, mas está visível para @everyone.",
+                setting_name,
             )
 
 
@@ -6027,6 +6280,10 @@ async def setup_hook() -> None:
             bot.tree.copy_global_to(guild=guild)
             await bot.tree.sync(guild=guild)
             logger.info("Comandos sincronizados no servidor %s.", GUILD_ID)
+            await bot.tree.sync()
+            logger.info(
+                "Comandos globais também sincronizados para remover aliases antigos."
+            )
         else:
             logger.info(
                 "GUILD_ID não configurado. Comandos globais podem demorar para aparecer no Discord."
@@ -6475,6 +6732,12 @@ class PublishShopChannelSelect(discord.ui.ChannelSelect):
                 "Use dentro do servidor.", ephemeral=True
             )
             return
+        shop = store_db.get_shop(interaction.guild.id, self.shop.id)
+        if shop is None or shop.owner_id != interaction.user.id:
+            await interaction.response.send_message(
+                "Essa loja não existe mais ou não pertence a você.", ephemeral=True
+            )
+            return
         selected_channel = self.values[0]
         channel = interaction.guild.get_channel(selected_channel.id)
         if channel is None:
@@ -6491,31 +6754,27 @@ class PublishShopChannelSelect(discord.ui.ChannelSelect):
                 "Selecione um canal de texto.", ephemeral=True
             )
             return
-        products = store_db.list_products(self.shop.guild_id, self.shop.id)
+        products = store_db.list_products(shop.guild_id, shop.id)
         await interaction.response.defer(ephemeral=True, thinking=True)
-        existing = store_db.get_shop_publication(self.shop.db_id, channel.id)
+        existing = store_db.get_shop_publication(shop.db_id, channel.id)
         try:
             message: discord.Message
             if existing is not None:
                 try:
                     message = await channel.fetch_message(int(existing["message_id"]))
                     await message.edit(
-                        embed=build_shop_panel_embed(self.shop, products),
-                        view=PublicPublishedShopView(
-                            interaction.guild.id, self.shop.id
-                        ),
+                        embed=build_shop_panel_embed(shop, products),
+                        view=PublicPublishedShopView(interaction.guild.id, shop.id),
                     )
                 except discord.NotFound:
                     message = await channel.send(
-                        embed=build_shop_panel_embed(self.shop, products),
-                        view=PublicPublishedShopView(
-                            interaction.guild.id, self.shop.id
-                        ),
+                        embed=build_shop_panel_embed(shop, products),
+                        view=PublicPublishedShopView(interaction.guild.id, shop.id),
                     )
             else:
                 message = await channel.send(
-                    embed=build_shop_panel_embed(self.shop, products),
-                    view=PublicPublishedShopView(interaction.guild.id, self.shop.id),
+                    embed=build_shop_panel_embed(shop, products),
+                    view=PublicPublishedShopView(interaction.guild.id, shop.id),
                 )
         except discord.Forbidden:
             await interaction.followup.send(
@@ -6530,7 +6789,7 @@ class PublishShopChannelSelect(discord.ui.ChannelSelect):
             )
             return
         store_db.upsert_shop_publication(
-            interaction.guild.id, self.shop.db_id, channel.id, message.id
+            interaction.guild.id, shop.db_id, channel.id, message.id
         )
         action = "atualizado" if existing is not None else "publicado"
         await interaction.followup.send(
@@ -6600,48 +6859,16 @@ async def create_shop(
 
 
 @bot.tree.command(
-    name="lojas", description="Mostra todas as lojas cadastradas neste servidor."
-)
-async def list_shops(interaction: discord.Interaction) -> None:
-    guild_id = guild_only_interaction(interaction)
-    shops = store_db.list_shops(guild_id)
-    if not shops:
-        await interaction.response.send_message(
-            "Ainda não existe nenhuma loja cadastrada.", ephemeral=True
-        )
-        return
-    await interaction.response.send_message(
-        embed=build_shop_card_embed(shops, 0),
-        view=ShopBrowserView(interaction.user.id, shops, 0),
-        ephemeral=True,
-    )
-
-
-@bot.tree.command(
     name="painel_loja",
-    description="Abre o painel universal de lojas, pedidos e tickets.",
+    description="Abre a gestão das suas lojas, produtos e histórico.",
 )
 async def store_panel(interaction: discord.Interaction) -> None:
-    await send_main_panel(interaction)
+    await send_owner_panel(interaction)
 
 
 @bot.tree.command(name="painel", description="Abre o painel principal do sistema.")
 async def main_panel_alias(interaction: discord.Interaction) -> None:
     await send_main_panel(interaction)
-
-
-@bot.tree.command(
-    name="gerenciar_lojas", description="Abre a area administrativa das suas lojas."
-)
-async def manage_shops_command(interaction: discord.Interaction) -> None:
-    await send_owner_panel(interaction)
-
-
-@bot.tree.command(
-    name="loja", description="Abre o gerenciamento central da sua loja e do catálogo."
-)
-async def manage_store_alias(interaction: discord.Interaction) -> None:
-    await send_owner_panel(interaction)
 
 
 @bot.tree.command(
@@ -6658,11 +6885,11 @@ async def request_seller_role(interaction: discord.Interaction) -> None:
 
 
 @bot.tree.command(name="ver_loja", description="Abre a vitrine de uma loja.")
-@app_commands.describe(id_loja="ID da loja que aparece no comando /lojas")
+@app_commands.describe(id_loja="ID da loja exibida no marketplace do /painel")
 async def view_shop(interaction: discord.Interaction, id_loja: int) -> None:
     guild_id = guild_only_interaction(interaction)
     shop = store_db.get_shop(guild_id, id_loja)
-    if shop is None:
+    if shop is None or not shop.active:
         await interaction.response.send_message("Loja não encontrada.", ephemeral=True)
         return
     products = store_db.list_products(guild_id, id_loja)
@@ -7030,7 +7257,7 @@ async def set_shop_theme(
 
 
 @bot.tree.command(
-    name="excluir_loja", description="Remove uma loja sua e tudo ligado a ela."
+    name="excluir_loja", description="Exclui somente lojas que nunca receberam pedidos."
 )
 @app_commands.describe(id_loja="ID da loja que você deseja excluir")
 async def delete_shop_command(interaction: discord.Interaction, id_loja: int) -> None:
@@ -7050,7 +7277,7 @@ async def delete_shop_command(interaction: discord.Interaction, id_loja: int) ->
     if not deleted:
         if store_db.shop_has_orders(guild_id, id_loja, interaction.user.id):
             await interaction.response.send_message(
-                "Não é possível excluir essa loja porque ela possui pedidos no histórico.",
+                "Não é possível excluir essa loja porque ela possui pedidos no histórico. Use `/painel_loja` para arquivá-la sem apagar dados.",
                 ephemeral=True,
             )
         else:
@@ -7127,7 +7354,13 @@ async def buy_product(
         await interaction.response.send_message(
             f"**Termos da loja {shop_title(shop.name, shop.shop_emoji)}**\n\n{shop.terms_text}",
             ephemeral=True,
-            view=TermsAcceptanceView(shop, [product], interaction.user.id),
+            view=TermsAcceptanceView(
+                shop,
+                [product],
+                interaction.user.id,
+                default_quantities={int(product["id"]): quantidade},
+                default_details=detalhes,
+            ),
         )
         return
 

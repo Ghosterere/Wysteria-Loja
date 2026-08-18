@@ -4,6 +4,8 @@ import tempfile
 import unittest
 from contextlib import closing
 from pathlib import Path
+from types import SimpleNamespace
+from unittest.mock import AsyncMock, patch
 
 _import_directory = tempfile.TemporaryDirectory()
 os.environ["DATABASE_PATH"] = str(Path(_import_directory.name) / "import.db")
@@ -81,6 +83,10 @@ class LojaDCTestCase(unittest.TestCase):
 
 
 class PriceTests(LojaDCTestCase):
+    def test_required_privileged_intents_are_enabled(self) -> None:
+        self.assertTrue(bot.bot.intents.members)
+        self.assertTrue(bot.bot.intents.message_content)
+
     def test_price_parser_is_decimal_and_rounds_half_up(self) -> None:
         self.assertEqual(bot.parse_price_to_cents("R$ 25,50"), 2550)
         self.assertEqual(bot.parse_price_to_cents("0.005"), 1)
@@ -95,6 +101,114 @@ class PriceTests(LojaDCTestCase):
 
 
 class DatabaseFlowTests(LojaDCTestCase):
+    def test_shop_without_orders_can_be_deleted(self) -> None:
+        shop, _, _ = self.create_shop_and_products()
+        self.assertTrue(
+            self.database.delete_shop(self.guild_id, shop.id, self.owner_id)
+        )
+        self.assertIsNone(self.database.get_shop(self.guild_id, shop.id))
+
+    def test_shop_with_any_order_status_cannot_be_deleted(self) -> None:
+        for status in ("pendente", "concluido", "cancelado"):
+            with self.subTest(status=status):
+                database_path = Path(self.directory.name) / f"{status}.db"
+                database = bot.StoreDatabase(database_path)
+                public_id = database.create_shop(
+                    self.guild_id, self.owner_id, f"Loja {status}", ""
+                )
+                shop = database.get_shop(self.guild_id, public_id)
+                assert shop is not None
+                product_id = database.add_product(
+                    shop.db_id, "Produto", "Geral", 1000, ""
+                )
+                order_id = database.create_order(
+                    self.guild_id,
+                    shop.db_id,
+                    product_id,
+                    self.buyer_id,
+                    1,
+                    "",
+                    1000,
+                )
+                if status != "pendente":
+                    with database.connection() as connection:
+                        connection.execute(
+                            "UPDATE orders SET status = ? WHERE id = ?",
+                            (status, order_id),
+                        )
+                self.assertFalse(
+                    database.delete_shop(self.guild_id, shop.id, self.owner_id)
+                )
+                self.assertIsNotNone(database.get_order_details(order_id))
+                with (
+                    database.connection() as connection,
+                    self.assertRaises(sqlite3.IntegrityError),
+                ):
+                    connection.execute("DELETE FROM shops WHERE id = ?", (shop.db_id,))
+
+    def test_archived_shop_is_hidden_but_history_remains_intact(self) -> None:
+        order_id, order = self.create_order("concluido")
+        shop_id = int(order["shop_public_id"])
+        before_items = len(self.database.list_order_items(order_id))
+        self.assertTrue(
+            self.database.set_shop_active(
+                self.guild_id, shop_id, self.owner_id, False
+            )
+        )
+        self.assertEqual(self.database.list_shops(self.guild_id), [])
+        archived_shop = self.database.get_shop(self.guild_id, shop_id)
+        self.assertIsNotNone(archived_shop)
+        assert archived_shop is not None
+        self.assertFalse(archived_shop.active)
+        self.assertIsNotNone(self.database.get_order_details(order_id))
+        self.assertEqual(len(self.database.list_order_items(order_id)), before_items)
+        owner_shop_ids = {
+            int(shop["id"])
+            for shop in self.database.list_shops_for_owner(
+                self.guild_id, self.owner_id
+            )
+        }
+        self.assertIn(shop_id, owner_shop_ids)
+
+    def test_only_consolidated_panel_commands_are_registered(self) -> None:
+        command_names = {command.name for command in bot.bot.tree.get_commands()}
+        self.assertIn("painel", command_names)
+        self.assertIn("painel_loja", command_names)
+        self.assertTrue(
+            {"lojas", "loja", "gerenciar_loja", "gerenciar_lojas"}.isdisjoint(
+                command_names
+            )
+        )
+
+    def test_purchase_modal_preserves_command_defaults_after_terms(self) -> None:
+        shop, product_a, product_b = self.create_shop_and_products()
+        products = [
+            self.database.get_product(self.guild_id, product_a),
+            self.database.get_product(self.guild_id, product_b),
+        ]
+        self.assertTrue(all(product is not None for product in products))
+        terms_view = bot.TermsAcceptanceView(
+            shop,
+            products,  # type: ignore[arg-type]
+            self.buyer_id,
+            default_quantities={product_a: 2, product_b: 3},
+            default_details="Briefing informado no comando",
+        )
+        terms_button = terms_view.children[0]
+        self.assertEqual(terms_button.default_quantities[product_a], 2)  # type: ignore[attr-defined]
+        self.assertEqual(  # type: ignore[attr-defined]
+            terms_button.default_details, "Briefing informado no comando"
+        )
+        modal = bot.PurchaseModal(
+            shop,
+            products,  # type: ignore[arg-type]
+            accepted_terms_text="Termos atuais",
+            default_quantities={product_a: 2, product_b: 3},
+            default_details="Briefing informado no comando",
+        )
+        self.assertEqual(modal.quantity.default, f"{product_a}=2, {product_b}=3")
+        self.assertEqual(modal.details.default, "Briefing informado no comando")
+
     def test_shop_and_product_names_cannot_be_blank(self) -> None:
         with self.assertRaises(ValueError):
             self.database.create_shop(self.guild_id, self.owner_id, "   ", "")
@@ -275,6 +389,13 @@ class DatabaseFlowTests(LojaDCTestCase):
         self.assertTrue(view.is_persistent())
         self.assertTrue(all(item.custom_id for item in view.children))
 
+        application_view = bot.SellerApplicationReviewView(123)
+        publication_view = bot.PublicPublishedShopView(self.guild_id, 456)
+        self.assertTrue(application_view.is_persistent())
+        self.assertTrue(publication_view.is_persistent())
+        self.assertTrue(all(item.custom_id for item in application_view.children))
+        self.assertTrue(all(item.custom_id for item in publication_view.children))
+
     def test_startup_repairs_removed_product_references_without_losing_history(
         self,
     ) -> None:
@@ -307,6 +428,44 @@ class DatabaseFlowTests(LojaDCTestCase):
                 ).fetchone()[0],
                 2,
             )
+
+
+class TicketFlowTests(LojaDCTestCase, unittest.IsolatedAsyncioTestCase):
+    async def test_failed_discord_reopen_does_not_change_database_status(self) -> None:
+        order_id, _ = self.create_order("fechado")
+        interaction = SimpleNamespace(
+            user=SimpleNamespace(id=self.owner_id),
+            guild=object(),
+            channel=None,
+            response=SimpleNamespace(defer=AsyncMock(), send_message=AsyncMock()),
+            followup=SimpleNamespace(send=AsyncMock()),
+        )
+        button = bot.TicketActionButton(
+            order_id,
+            "reopen",
+            "Reabrir",
+            bot.discord.ButtonStyle.secondary,
+        )
+        with (
+            patch.object(bot, "store_db", self.database),
+            patch.object(
+                bot,
+                "reopen_ticket_on_discord",
+                AsyncMock(
+                    side_effect=bot.app_commands.AppCommandError(
+                        "Discord recusou a reabertura"
+                    )
+                ),
+            ),
+        ):
+            await button.callback(interaction)  # type: ignore[arg-type]
+
+        order = self.database.get_order_details(order_id)
+        assert order is not None
+        self.assertEqual(str(order["status"]), "fechado")
+        interaction.followup.send.assert_awaited_once_with(
+            "Discord recusou a reabertura", ephemeral=True
+        )
 
 
 if __name__ == "__main__":
